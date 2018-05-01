@@ -26,6 +26,7 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.Platform
 import org.apache.spark.unsafe.array.ByteArrayMethods
 import org.apache.spark.unsafe.types.{ByteArray, UTF8String}
+import org.apache.spark.util.collection.OpenHashSet
 
 /**
  * Given an array or map, returns its size. Returns -1 if null.
@@ -883,3 +884,333 @@ case class Concat(children: Seq[Expression]) extends Expression {
 
   override def sql: String = s"concat(${children.map(_.sql).mkString(", ")})"
 }
+
+object ArraySetUtils {
+  val kindUnion = 1
+  val kindIntersection = 2
+
+  def toUnsafeIntArray(hs: OpenHashSet[Int]): UnsafeArrayData = {
+    val array = new Array[Int](hs.size)
+    var pos = hs.nextPos(0)
+    var i = 0
+    while (pos != OpenHashSet.INVALID_POS) {
+      array(i) = hs.getValue(pos)
+      pos = hs.nextPos(pos + 1)
+      i += 1
+    }
+    UnsafeArrayData.fromPrimitiveArray(array)
+  }
+
+  def toUnsafeLongArray(hs: OpenHashSet[Long]): UnsafeArrayData = {
+    val array = new Array[Long](hs.size)
+    var pos = hs.nextPos(0)
+    var i = 0
+    while (pos != OpenHashSet.INVALID_POS) {
+      array(i) = hs.getValue(pos)
+      pos = hs.nextPos(pos + 1)
+      i += 1
+    }
+    UnsafeArrayData.fromPrimitiveArray(array)
+  }
+
+  def arrayUnion(array1: ArrayData, array2: ArrayData, et: DataType): ArrayData = {
+    new GenericArrayData(array1.toArray[AnyRef](et).union(array2.toArray[AnyRef](et))
+      .distinct.asInstanceOf[Array[Any]])
+  }
+
+  def arrayIntersect(array1: ArrayData, array2: ArrayData, et: DataType): ArrayData = {
+    new GenericArrayData(array1.toArray[AnyRef](et).intersect(array2.toArray[AnyRef](et))
+      .distinct.asInstanceOf[Array[Any]])
+  }
+
+  def arrayExcept(array1: ArrayData, array2: ArrayData, et: DataType): ArrayData = {
+    new GenericArrayData(array1.toArray[AnyRef](et).diff(array2.toArray[AnyRef](et))
+      .distinct.asInstanceOf[Array[Any]])
+  }
+}
+
+abstract class ArraySetUtils extends BinaryExpression with ExpectsInputTypes {
+  def typeId: Int
+
+  override def inputTypes: Seq[AbstractDataType] = Seq(ArrayType, ArrayType)
+
+  override def checkInputDataTypes(): TypeCheckResult = {
+    val r = super.checkInputDataTypes()
+    if ((r == TypeCheckResult.TypeCheckSuccess) &&
+      (left.dataType.asInstanceOf[ArrayType].elementType !=
+        right.dataType.asInstanceOf[ArrayType].elementType)) {
+      TypeCheckResult.TypeCheckFailure("Element type in both arrays must be the same")
+    } else {
+      r
+    }
+  }
+
+  override def dataType: DataType = left.dataType
+
+  private def elementType = dataType.asInstanceOf[ArrayType].elementType
+  private def cn = left.dataType.asInstanceOf[ArrayType].containsNull ||
+    right.dataType.asInstanceOf[ArrayType].containsNull
+
+  def intEval(ary: ArrayData, hs2: OpenHashSet[Int]): OpenHashSet[Int]
+  def longEval(ary: ArrayData, hs2: OpenHashSet[Long]): OpenHashSet[Long]
+  def genericEval(ary: ArrayData, hs2: OpenHashSet[Any], et: DataType): OpenHashSet[Any]
+  def codeGen(ctx: CodegenContext, classTag : String, hs2: String, hs: String, len: String,
+              getter: String, i: String,
+              postFix: String, newOpenHashSet: String): String
+
+  override def nullSafeEval(input1: Any, input2: Any): Any = {
+    val ary1 = input1.asInstanceOf[ArrayData]
+    val ary2 = input2.asInstanceOf[ArrayData]
+
+    if (!cn) {
+      elementType match {
+        case IntegerType =>
+          // avoid boxing of primitive int array elements
+          val hs2 = new OpenHashSet[Int]
+          var i = 0
+          while (i < ary2.numElements()) {
+            hs2.add(ary2.getInt(i))
+            i += 1
+          }
+          ArraySetUtils.toUnsafeIntArray(intEval(ary1, hs2))
+        case LongType =>
+          // avoid boxing of primitive long array elements
+          val hs2 = new OpenHashSet[Long]
+          var i = 0
+          while (i < ary2.numElements()) {
+            hs2.add(ary2.getLong(i))
+            i += 1
+          }
+          ArraySetUtils.toUnsafeLongArray(longEval(ary1, hs2))
+        case _ =>
+          val hs2 = new OpenHashSet[Any]
+          var i = 0
+          while (i < ary2.numElements()) {
+            hs2.add(ary2.get(i, elementType))
+            i += 1
+          }
+          new GenericArrayData(genericEval(ary1, hs2, elementType).iterator.toArray)
+      }
+    } else {
+      if (typeId == ArraySetUtils.kindUnion) {
+        ArraySetUtils.arrayUnion(ary1, ary2, elementType)
+      } else if (typeId == ArraySetUtils.kindIntersection) {
+        ArraySetUtils.arrayIntersect(ary1, ary2, elementType)
+      } else {
+        null
+      }
+    }
+  }
+
+  override def doGenCode(ctx: CodegenContext, ev: ExprCode): ExprCode = {
+    val i = ctx.freshName("i")
+    val arraySetUtils = "org.apache.spark.sql.catalyst.expressions.ArraySetUtils"
+    val genericArrayData = classOf[GenericArrayData].getName
+    val unsafeArrayData = classOf[UnsafeArrayData].getName
+    val openHashSet = classOf[OpenHashSet[_]].getName
+    val et = s"org.apache.spark.sql.types.DataTypes.$elementType"
+    val (postFix, classTag, getter, arrayBuilder, javaTypeName) = if (!cn) {
+      val ptName = CodeGenerator.primitiveTypeName(elementType)
+      elementType match {
+        case ByteType | ShortType | IntegerType =>
+          (s"$$mcI$$sp", s"scala.reflect.ClassTag$$.MODULE$$.$ptName()", s"get$ptName($i)",
+            s"$unsafeArrayData.fromPrimitiveArray", CodeGenerator.javaType(elementType))
+        case LongType =>
+          (s"$$mcJ$$sp", s"scala.reflect.ClassTag$$.MODULE$$.$ptName()", s"get$ptName($i)",
+            s"$unsafeArrayData.fromPrimitiveArray", "long")
+        case _ =>
+          ("", s"scala.reflect.ClassTag$$.MODULE$$.Object()", s"get($i, $et)",
+            s"new $genericArrayData", "Object")
+      }
+    } else {
+      ("", "", "", "", "")
+    }
+
+    val hs = ctx.freshName("hs")
+    val hs2 = ctx.freshName("hs2")
+    val invalidPos = ctx.freshName("invalidPos")
+    val pos = ctx.freshName("pos")
+    val ary = ctx.freshName("ary")
+    nullSafeCodeGen(ctx, ev, (ary1, ary2) => {
+      if (classTag != "") {
+        val secondLoop = codeGen(ctx, classTag, hs2, hs, s"$ary1.numElements()",
+          s"$ary1.$getter", i,
+          postFix, s"new $openHashSet$postFix($classTag)")
+        s"""
+           |$openHashSet $hs2 = new $openHashSet$postFix($classTag);
+           |for (int $i = 0; $i < $ary2.numElements(); $i++) {
+           |  $hs2.add$postFix($ary2.$getter);
+           |}
+           |$secondLoop
+           |$javaTypeName[] $ary = new $javaTypeName[$hs.size()];
+           |int $invalidPos = $openHashSet.INVALID_POS();
+           |int $pos = $hs.nextPos(0);
+           |int $i = 0;
+           |while ($pos != $invalidPos) {
+           |  $ary[$i] = ($javaTypeName) $hs.getValue$postFix($pos);
+           |  $pos = $hs.nextPos($pos + 1);
+           |  $i++;
+           |}
+           |${ev.value} = $arrayBuilder($ary);
+         """.stripMargin
+      } else {
+        val setOp = if (typeId == ArraySetUtils.kindUnion) {
+          "Union"
+        } else if (typeId == ArraySetUtils.kindIntersection) {
+          "Intersect"
+        } else {
+          null
+        }
+        s"${ev.value} = $arraySetUtils$$.MODULE$$.array$setOp($ary1, $ary2, $et);"
+      }
+    })
+  }
+}
+
+
+@ExpressionDescription(
+  usage = """
+    _FUNC_(array1, array2) - Returns an array of the elements in the union of array1 and array2,
+      without duplicates. The order of elements in the result is not determined.
+  """,
+  examples = """
+    Examples:
+      > SELECT _FUNC_(array(1, 2, 3), array(1, 3, 5));
+       array(1, 2, 3, 5)
+  """,
+  since = "2.4.0")
+case class ArrayUnion(left: Expression, right: Expression) extends ArraySetUtils {
+  override def typeId: Int = ArraySetUtils.kindUnion
+
+  override def intEval(ary: ArrayData, hs2: OpenHashSet[Int]): OpenHashSet[Int] = {
+    var i = 0
+    while (i < ary.numElements()) {
+      hs2.add(ary.getInt(i))
+      i += 1
+    }
+    hs2
+  }
+
+  override def longEval(ary: ArrayData, hs2: OpenHashSet[Long]): OpenHashSet[Long] = {
+    var i = 0
+    while (i < ary.numElements()) {
+      hs2.add(ary.getLong(i))
+      i += 1
+    }
+    hs2
+  }
+
+  override def genericEval(
+                            ary: ArrayData,
+                            hs2: OpenHashSet[Any],
+                            et: DataType): OpenHashSet[Any] = {
+    var i = 0
+    while (i < ary.numElements()) {
+      hs2.add(ary.get(i, et))
+      i += 1
+    }
+    hs2
+  }
+
+  override def codeGen(
+                        ctx: CodegenContext,
+                        classTag: String,
+                        hs2: String,
+                        hs: String,
+                        len: String,
+                        getter: String,
+                        i: String,
+                        postFix: String,
+                        newOpenHashSet: String): String = {
+    val openHashSet = classOf[OpenHashSet[_]].getName
+    s"""
+       |for (int $i = 0; $i < $len; $i++) {
+       |  $hs2.add$postFix($getter);
+       |}
+       |$openHashSet $hs = $hs2;
+     """.stripMargin
+  }
+
+  override def prettyName: String = "array_union"
+}
+
+@ExpressionDescription(
+  usage = """
+    _FUNC_(array1, array2) - Returns an array of the elements in the intersection of array1 and array2,
+      without duplicates. The order of elements in the result is not determined.
+  """,
+  examples = """
+    Examples:
+      > SELECT _FUNC_(array(1, 2, 3), array(1, 3, 5));
+       array(1, 3)
+  """
+  )
+case class ArrayIntersection(left: Expression, right: Expression) extends ArraySetUtils {
+  override def typeId: Int = ArraySetUtils.kindIntersection
+
+  override def intEval(ary: ArrayData, hs2: OpenHashSet[Int]): OpenHashSet[Int] = {
+    var i = 0
+    val hs1 = new OpenHashSet[Int]
+    while (i < ary.numElements()) {
+      val current = ary.getInt(i)
+      if (hs2.contains(current)) {
+        hs1.add(current)
+      }
+      i += 1
+    }
+    hs1
+  }
+
+  override def longEval(ary: ArrayData, hs2: OpenHashSet[Long]): OpenHashSet[Long] = {
+    var i = 0
+    val hs1 = new OpenHashSet[Long]
+    while (i < ary.numElements()) {
+      val current = ary.getLong(i)
+      if (hs2.contains(current)) {
+        hs1.add(current)
+      }
+      i += 1
+    }
+    hs1
+  }
+
+  override def genericEval(
+                            ary: ArrayData,
+                            hs2: OpenHashSet[Any],
+                            et: DataType): OpenHashSet[Any] = {
+    var i = 0
+    val hs1 = new OpenHashSet[Any]
+    while (i < ary.numElements()) {
+      val current = ary.get(i, et)
+      if (hs2.contains(current)) {
+        hs1.add(current)
+      }
+      i += 1
+    }
+    hs1
+  }
+
+  override def codeGen(
+                        ctx: CodegenContext,
+                        classTag: String,
+                        hs2: String,
+                        hs: String,
+                        len: String,
+                        getter: String,
+                        i: String,
+                        postFix: String,
+                        newOpenHashSet: String): String = {
+    val openHashSet = classOf[OpenHashSet[_]].getName
+    s"""
+       |$openHashSet $hs = new $openHashSet$postFix($classTag);
+       |for (int $i = 0; $i < $len; $i++) {
+       |  if ($hs2.contains($getter)) {
+       |     $hs.add$postFix($getter);
+       |  }
+       |}
+     """.stripMargin
+  }
+
+  override def prettyName: String = "array_intersection"
+}
+

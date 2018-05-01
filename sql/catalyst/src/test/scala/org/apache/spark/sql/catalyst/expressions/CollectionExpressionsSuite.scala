@@ -280,4 +280,96 @@ class CollectionExpressionsSuite extends SparkFunSuite with ExpressionEvalHelper
 
     checkEvaluation(Concat(Seq(aa0, aa1)), Seq(Seq("a", "b"), Seq("c"), Seq("d"), Seq("e", "f")))
   }
+
+
+  test("Array Union") {
+    val a00 = Literal.create(Seq(1, 2, 3), ArrayType(IntegerType, false))
+    val a01 = Literal.create(Seq(4, 2), ArrayType(IntegerType, false))
+    val a02 = Literal.create(Seq(1, 2, 3), ArrayType(IntegerType))
+    val a03 = Literal.create(Seq(1, 2, null, 4, 5), ArrayType(IntegerType))
+    val a04 = Literal.create(Seq(-5, 4, -3, 2, -1), ArrayType(IntegerType))
+    val a05 = Literal.create(Seq.empty[Int], ArrayType(IntegerType))
+
+    val a10 = Literal.create(Seq(1L, 2L, 3L), ArrayType(LongType, false))
+    val a11 = Literal.create(Seq(4L, 2L), ArrayType(LongType, false))
+    val a12 = Literal.create(Seq(1L, 2L, 3L), ArrayType(LongType))
+    val a13 = Literal.create(Seq(1L, 2L, null, 4L, 5L), ArrayType(LongType))
+    val a14 = Literal.create(Seq(-5L, 4L, -3L, 2L, -1L), ArrayType(LongType))
+    val a15 = Literal.create(Seq.empty[Long], ArrayType(LongType))
+
+    val a20 = Literal.create(Seq("b", "a", "c"), ArrayType(StringType))
+    val a21 = Literal.create(Seq("c", "d", "a", "f"), ArrayType(StringType))
+    val a22 = Literal.create(Seq("b", null, "a", "g"), ArrayType(StringType))
+    val a23 = Literal.create(Seq("b", "a", "c"), ArrayType(StringType, false))
+    val a24 = Literal.create(Seq("c", "d", "a", "f"), ArrayType(StringType, false))
+
+    val a30 = Literal.create(Seq(null, null), ArrayType(NullType))
+    val a31 = Literal.create(null, ArrayType(StringType))
+
+    checkEvaluation(ArrayUnion(a00, a01), UnsafeArrayData.fromPrimitiveArray(Array(4, 1, 3, 2)))
+    checkEvaluation(ArrayUnion(a01, a02), Seq(4, 2, 1, 3))
+    checkEvaluation(ArrayUnion(a03, a04), Seq(1, 2, null, 4, 5, -5, -3, -1))
+    checkEvaluation(ArrayUnion(a03, a05), Seq(1, 2, null, 4, 5))
+
+    checkEvaluation(
+      ArrayUnion(a10, a11), UnsafeArrayData.fromPrimitiveArray(Array(4L, 1L, 3L, 2L)))
+    checkEvaluation(ArrayUnion(a11, a12), Seq(4L, 2L, 1L, 3L))
+    checkEvaluation(ArrayUnion(a13, a14), Seq(1L, 2L, null, 4L, 5L, -5L, -3L, -1L))
+    checkEvaluation(ArrayUnion(a13, a15), Seq(1L, 2L, null, 4L, 5L))
+
+    checkEvaluation(ArrayUnion(a20, a21), Seq("b", "a", "c", "d", "f"))
+    checkEvaluation(ArrayUnion(a20, a22), Seq("b", "a", "c", null, "g"))
+    checkEvaluation(ArrayUnion(a23, a24), Seq("b", "c", "d", "a", "f"))
+
+    checkEvaluation(ArrayUnion(a30, a30), Seq(null))
+    checkEvaluation(ArrayUnion(a20, a31), null)
+    checkEvaluation(ArrayUnion(a31, a20), null)
+  }
+
+  test("Array Intersection") {
+    val a00 = Literal.create(Seq(1, 2, 3), ArrayType(IntegerType, false))
+    val a01 = Literal.create(Seq(4, 2), ArrayType(IntegerType, false))
+    val a02 = Literal.create(Seq(1, 2, 3), ArrayType(IntegerType))
+    val a03 = Literal.create(Seq(1, 2, null, 4, 5), ArrayType(IntegerType))
+    val a04 = Literal.create(Seq(-5, 4, -3, 2, -1), ArrayType(IntegerType))
+    val a05 = Literal.create(Seq.empty[Int], ArrayType(IntegerType))
+
+    val a10 = Literal.create(Seq(1L, 2L, 3L), ArrayType(LongType, false))
+    val a11 = Literal.create(Seq(4L, 2L), ArrayType(LongType, false))
+    val a12 = Literal.create(Seq(1L, 2L, 3L), ArrayType(LongType))
+    val a13 = Literal.create(Seq(1L, 2L, null, 4L, 5L), ArrayType(LongType))
+    val a14 = Literal.create(Seq(-5L, 4L, -3L, 2L, -1L), ArrayType(LongType))
+    val a15 = Literal.create(Seq.empty[Long], ArrayType(LongType))
+
+    val a20 = Literal.create(Seq("b", "a", "c"), ArrayType(StringType))
+    val a21 = Literal.create(Seq("c", "d", "a", "f"), ArrayType(StringType))
+    val a22 = Literal.create(Seq("b", null, "a", "g"), ArrayType(StringType))
+    val a23 = Literal.create(Seq("b", "a", "c"), ArrayType(StringType, false))
+    val a24 = Literal.create(Seq("c", "d", "a", "f"), ArrayType(StringType, false))
+
+    val a30 = Literal.create(Seq(null, null), ArrayType(NullType))
+    val a31 = Literal.create(null, ArrayType(StringType))
+
+    checkEvaluation(ArrayIntersection(a00, a01),
+      UnsafeArrayData.fromPrimitiveArray(Array(2)))
+    checkEvaluation(ArrayIntersection(a01, a02), Seq(2))
+    checkEvaluation(ArrayIntersection(a03, a04), Seq(2, 4))
+    checkEvaluation(ArrayIntersection(a03, a05), Seq.empty[Int])
+
+    checkEvaluation(
+      ArrayIntersection(a10, a11), UnsafeArrayData.fromPrimitiveArray(Array(2L)))
+    checkEvaluation(ArrayIntersection(a11, a12), Seq(2L))
+    checkEvaluation(ArrayIntersection(a13, a14), Seq(2L, 4L))
+    checkEvaluation(ArrayIntersection(a13, a15), Seq.empty[Long])
+
+    checkEvaluation(ArrayIntersection(a20, a21), Seq("a", "c"))
+    checkEvaluation(ArrayIntersection(a20, a22), Seq("b", "a"))
+    checkEvaluation(ArrayIntersection(a23, a24), Seq("c", "a"))
+
+    checkEvaluation(ArrayIntersection(a30, a30), Seq(null))
+    checkEvaluation(ArrayIntersection(a20, a31), null)
+    checkEvaluation(ArrayIntersection(a31, a20), null)
+  }
+
 }
+

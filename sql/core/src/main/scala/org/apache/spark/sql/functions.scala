@@ -3064,6 +3064,17 @@ object functions {
   }
 
   /**
+    * Returns an array of the elements in the union of the given two arrays, without duplicates.
+    * The order of elements in the result is not determined
+    *
+    * @group collection_funcs
+    * @since 2.4.0
+    */
+  def array_union(col1: Column, col2: Column): Column = withExpr {
+    ArrayUnion(col1.expr, col2.expr)
+  }
+
+  /**
    * Creates a new row for each element in the given array or map column.
    *
    * @group collection_funcs
