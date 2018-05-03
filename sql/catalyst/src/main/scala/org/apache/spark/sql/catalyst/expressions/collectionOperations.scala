@@ -888,6 +888,7 @@ case class Concat(children: Seq[Expression]) extends Expression {
 object ArraySetUtils {
   val kindUnion = 1
   val kindIntersection = 2
+  val kindExcept = 3
 
   def toUnsafeIntArray(hs: OpenHashSet[Int]): UnsafeArrayData = {
     val array = new Array[Int](hs.size)
@@ -996,6 +997,8 @@ abstract class ArraySetUtils extends BinaryExpression with ExpectsInputTypes {
         ArraySetUtils.arrayUnion(ary1, ary2, elementType)
       } else if (typeId == ArraySetUtils.kindIntersection) {
         ArraySetUtils.arrayIntersect(ary1, ary2, elementType)
+      } else if (typeId == ArraySetUtils.kindExcept) {
+        ArraySetUtils.arrayExcept(ary1, ary2, elementType)
       } else {
         null
       }
@@ -1058,8 +1061,10 @@ abstract class ArraySetUtils extends BinaryExpression with ExpectsInputTypes {
           "Union"
         } else if (typeId == ArraySetUtils.kindIntersection) {
           "Intersect"
+        } else if (typeId == ArraySetUtils.kindExcept) {
+          "Except"
         } else {
-          null
+          ""
         }
         s"${ev.value} = $arraySetUtils$$.MODULE$$.array$setOp($ary1, $ary2, $et);"
       }
@@ -1214,3 +1219,83 @@ case class ArrayIntersection(left: Expression, right: Expression) extends ArrayS
   override def prettyName: String = "array_intersection"
 }
 
+
+@ExpressionDescription(
+  usage = """
+    _FUNC_(array1, array2) - Returns an array of the elements that are in array1 but not in array2,
+      without duplicates. The order of elements in the result is not determined.
+  """,
+  examples = """
+    Examples:
+      > SELECT _FUNC_(array(1, 2, 3), array(1, 3, 5));
+       array(1, 3)
+  """
+)
+case class ArrayExcept(left: Expression, right: Expression) extends ArraySetUtils {
+  override def typeId: Int = ArraySetUtils.kindExcept
+
+  override def intEval(ary: ArrayData, hs2: OpenHashSet[Int]): OpenHashSet[Int] = {
+    var i = 0
+    val hs1 = new OpenHashSet[Int]
+    while (i < ary.numElements()) {
+      val current = ary.getInt(i)
+      if (!hs2.contains(current)) {
+        hs1.add(current)
+      }
+      i += 1
+    }
+    hs1
+  }
+
+  override def longEval(ary: ArrayData, hs2: OpenHashSet[Long]): OpenHashSet[Long] = {
+    var i = 0
+    val hs1 = new OpenHashSet[Long]
+    while (i < ary.numElements()) {
+      val current = ary.getLong(i)
+      if (!hs2.contains(current)) {
+        hs1.add(current)
+      }
+      i += 1
+    }
+    hs1
+  }
+
+  override def genericEval(
+                            ary: ArrayData,
+                            hs2: OpenHashSet[Any],
+                            et: DataType): OpenHashSet[Any] = {
+    var i = 0
+    val hs1 = new OpenHashSet[Any]
+    while (i < ary.numElements()) {
+      val current = ary.get(i, et)
+      if (!hs2.contains(current)) {
+        hs1.add(current)
+      }
+      i += 1
+    }
+    hs1
+  }
+
+  override def codeGen(
+                        ctx: CodegenContext,
+                        classTag: String,
+                        hs2: String,
+                        hs: String,
+                        len: String,
+                        getter: String,
+                        i: String,
+                        postFix: String,
+                        newOpenHashSet: String): String = {
+    val openHashSet = classOf[OpenHashSet[_]].getName
+    s"""
+       |$openHashSet $hs = new $openHashSet$postFix($classTag);
+       |for (int $i = 0; $i < $len; $i++) {
+       |  if (!$hs2.contains($getter)) {
+       |     $hs.add$postFix($getter);
+       |  }
+       |}
+     """.stripMargin
+  }
+
+  override def prettyName: String = "array_except"
+}

@@ -674,6 +674,120 @@ class DataFrameFunctionsSuite extends QueryTest with SharedSQLContext {
     }
   }
 
+  test("array_intersection functions") {
+    val df1 = Seq((Array(1, 2, 3), Array(4, 2))).toDF("a", "b")
+    val ans1 = Row(Seq(2))
+    checkAnswer(df1.select(array_intersection($"a", $"b")), ans1)
+    checkAnswer(df1.selectExpr("array_intersection(a, b)"), ans1)
+
+    val df2 = Seq((Array[Integer](1, 2, null, 4, 5), Array(-5, 4, -3, 2, -1))).toDF("a", "b")
+    val ans2 = Row(Seq(2, 4))
+    checkAnswer(df2.select(array_intersection($"a", $"b")), ans2)
+    checkAnswer(df2.selectExpr("array_intersection(a, b)"), ans2)
+
+    val df3 = Seq((Array(1L, 2L, 3L), Array(4L, 2L))).toDF("a", "b")
+    val ans3 = Row(Seq(2L))
+    checkAnswer(df3.select(array_intersection($"a", $"b")), ans3)
+    checkAnswer(df3.selectExpr("array_intersection(a, b)"), ans3)
+
+    val df4 = Seq((Array[java.lang.Long](1L, 2L, null, 4L, 5L), Array(-5L, 4L, -3L, 2L, -1L)))
+      .toDF("a", "b")
+    val ans4 = Row(Seq(2L, 4L))
+    checkAnswer(df4.select(array_intersection($"a", $"b")), ans4)
+    checkAnswer(df4.selectExpr("array_intersection(a, b)"), ans4)
+
+    val df5 = Seq((Array("b", "a", "c"), Array("b", null, "a", "g"))).toDF("a", "b")
+    val ans5 = Row(Seq("b", "a"))
+    checkAnswer(df5.select(array_intersection($"a", $"b")), ans5)
+    checkAnswer(df5.selectExpr("array_intersection(a, b)"), ans5)
+
+    val df6 = Seq((null, null)).toDF("a", "b")
+    val ans6 = Row(null)
+    checkAnswer(df6.select(array_intersection($"a", $"b")), ans6)
+    checkAnswer(df6.selectExpr("array_intersection(a, b)"), ans6)
+
+    val df7 = Seq((Array(1), Array("a"))).toDF("a", "b")
+    intercept[AnalysisException] {
+      df7.select(array_intersection($"a", $"b"))
+    }
+    intercept[AnalysisException] {
+      df7.selectExpr("array_contains(a, b)")
+    }
+
+    val df8 = Seq((null, Array("a"))).toDF("a", "b")
+    intercept[AnalysisException] {
+      df8.select(array_intersection($"a", $"b"))
+    }
+    intercept[AnalysisException] {
+      df8.selectExpr("array_contains(a, b)")
+    }
+
+    val df9 = Seq((Array("a"), null)).toDF("a", "b")
+    intercept[AnalysisException] {
+      df9.select(array_intersection($"a", $"b"))
+    }
+    intercept[AnalysisException] {
+      df9.selectExpr("array_contains(a, b)")
+    }
+  }
+
+  test("array_except functions") {
+    val df1 = Seq((Array(1, 2, 3), Array(4, 2))).toDF("a", "b")
+    val ans1 = Row(Seq(1, 3))
+    checkAnswer(df1.select(array_except($"a", $"b")), ans1)
+    checkAnswer(df1.selectExpr("array_except(a, b)"), ans1)
+
+    val df2 = Seq((Array[Integer](1, 2, null, 4, 5), Array(-5, 4, -3, 2, -1))).toDF("a", "b")
+    val ans2 = Row(Seq(1, null, 5))
+    checkAnswer(df2.select(array_except($"a", $"b")), ans2)
+    checkAnswer(df2.selectExpr("array_except(a, b)"), ans2)
+
+    val df3 = Seq((Array(1L, 2L, 3L), Array(4L, 2L))).toDF("a", "b")
+    val ans3 = Row(Seq(1L, 3L))
+    checkAnswer(df3.select(array_except($"a", $"b")), ans3)
+    checkAnswer(df3.selectExpr("array_except(a, b)"), ans3)
+
+    val df4 = Seq((Array[java.lang.Long](1L, 2L, null, 4L, 5L), Array(-5L, 4L, -3L, 2L, -1L)))
+      .toDF("a", "b")
+    val ans4 = Row(Seq(1L, null, 5L))
+    checkAnswer(df4.select(array_except($"a", $"b")), ans4)
+    checkAnswer(df4.selectExpr("array_except(a, b)"), ans4)
+
+    val df5 = Seq((Array("b", "a", "c"), Array("b", null, "a", "g"))).toDF("a", "b")
+    val ans5 = Row(Seq("c"))
+    checkAnswer(df5.select(array_except($"a", $"b")), ans5)
+    checkAnswer(df5.selectExpr("array_except(a, b)"), ans5)
+
+    val df6 = Seq((null, null)).toDF("a", "b")
+    val ans6 = Row(null)
+    checkAnswer(df6.select(array_except($"a", $"b")), ans6)
+    checkAnswer(df6.selectExpr("array_except(a, b)"), ans6)
+
+    val df7 = Seq((Array(1), Array("a"))).toDF("a", "b")
+    intercept[AnalysisException] {
+      df7.select(array_except($"a", $"b"))
+    }
+    intercept[AnalysisException] {
+      df7.selectExpr("array_except(a, b)")
+    }
+
+    val df8 = Seq((null, Array("a"))).toDF("a", "b")
+    intercept[AnalysisException] {
+      df8.select(array_except($"a", $"b"))
+    }
+    intercept[AnalysisException] {
+      df8.selectExpr("array_contains(a, b)")
+    }
+
+    val df9 = Seq((Array("a"), null)).toDF("a", "b")
+    intercept[AnalysisException] {
+      df9.select(array_except($"a", $"b"))
+    }
+    intercept[AnalysisException] {
+      df9.selectExpr("array_contains(a, b)")
+    }
+  }
+
   test("concat function - arrays") {
     val nseqi : Seq[Int] = null
     val nseqs : Seq[String] = null

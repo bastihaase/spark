@@ -404,6 +404,7 @@ object FunctionRegistry {
     expression[ArrayPosition]("array_position"),
     expression[ArrayUnion]("array_union"),
     expression[ArrayIntersection]("array_intersection"),
+    expression[ArrayExcept]("array_except"),
     expression[CreateMap]("map"),
     expression[CreateNamedStruct]("named_struct"),
     expression[ElementAt]("element_at"),
